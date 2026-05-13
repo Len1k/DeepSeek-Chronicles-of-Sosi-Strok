@@ -24,6 +24,9 @@
 #define AUTH_0600 0x0600
 
 // ========== КРОСС-ПЛАТФОРМЕННЫЙ ВВОД ==========
+int kbhit();
+char getch();
+
 void clrscr() {
 #ifdef _WIN32
     system("cls");
@@ -32,24 +35,8 @@ void clrscr() {
 #endif
 }
 
-void slowprint(const std::string &s, int ms = 25) {
-    for (char c : s) {
-        std::cout << c << std::flush;
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-    }
-}
-
 void pause(int sec = 1) {
     std::this_thread::sleep_for(std::chrono::seconds(sec));
-}
-
-void loading(const std::string &msg, int sec = 2) {
-    std::cout << msg;
-    for (int i = 0; i < sec * 4; ++i) {
-        std::cout << "." << std::flush;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }
-    std::cout << "\n";
 }
 
 #ifdef _WIN32
@@ -88,12 +75,57 @@ char getch() {
 }
 #endif
 
+bool isSkipKey(char c) {
+    return c == '\n' || c == '\r';
+}
+
+void drainPendingSkipKeys() {
+    while (kbhit()) {
+        char c = getch();
+        if (!isSkipKey(c)) return;
+    }
+}
+
+bool consumeSkipRequest() {
+    if (!kbhit()) return false;
+    char c = getch();
+    return isSkipKey(c);
+}
+
+void slowprint(const std::string &s, int ms = 25) {
+    drainPendingSkipKeys();
+    for (size_t i = 0; i < s.size(); ++i) {
+        std::cout << s[i] << std::flush;
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        if (consumeSkipRequest()) {
+            std::cout << s.substr(i + 1) << std::flush;
+            break;
+        }
+    }
+}
+
+void loading(const std::string &msg, int sec = 2) {
+    slowprint(msg);
+    drainPendingSkipKeys();
+    for (int i = 0; i < sec * 4; ++i) {
+        std::cout << "." << std::flush;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (consumeSkipRequest()) break;
+    }
+    std::cout << "\n";
+}
+
 // ========== ASCII-ART БАЗА ==========
 void drawArt(const std::string &art, int charDelayMs = 5) {
     clrscr();
-    for (char c : art) {
-        std::cout << c << std::flush;
+    drainPendingSkipKeys();
+    for (size_t i = 0; i < art.size(); ++i) {
+        std::cout << art[i] << std::flush;
         std::this_thread::sleep_for(std::chrono::milliseconds(charDelayMs));
+        if (consumeSkipRequest()) {
+            std::cout << art.substr(i + 1) << std::flush;
+            break;
+        }
     }
     std::cout << "\n";
 }
