@@ -177,7 +177,6 @@ void configureTerminalAudio() {
 }
 
 void slowprint(const std::string &s, int ms) {
-void slowprint(const std::string &s, int ms = 25) {
     drainPendingSkipKeys();
     for (size_t i = 0; i < s.size(); ++i) {
         std::cout << s[i] << std::flush;
@@ -213,88 +212,6 @@ void drawArt(const std::string &art, int charDelayMs = 5) {
         }
     }
     std::cout << "\n";
-}
-
-// ========== ТЕРМИНАЛЬНЫЙ ЗВУК ==========
-std::atomic<bool> terminalAudioEnabled{false};
-std::atomic<bool> ambientRunning{false};
-std::thread ambientThread;
-
-void terminalBell(int count = 1, int gapMs = 90) {
-    if (!terminalAudioEnabled) return;
-    for (int i = 0; i < count; ++i) {
-        std::cout << '\a' << std::flush;
-        if (i + 1 < count) std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
-    }
-}
-
-std::vector<int> ambientPatternForChapter(int chapter) {
-    switch (chapter) {
-        case 1: return {1800, 2200, 900, 3200};      // серверный гул и редкие пинги
-        case 2: return {1200, 1200, 2600, 800};      // тревожный бункерный радар
-        case 3: return {650, 650, 1400, 2200};       // гачи-ритм Dungeon Masters
-        case 4: return {3000, 4500, 1600};           // пустотный финальный дрон
-        default: return {2500};
-    }
-}
-
-std::string ambientNameForChapter(int chapter) {
-    switch (chapter) {
-        case 1: return "Серверный гул";
-        case 2: return "Бункерный радар";
-        case 3: return "Гачи-дрон";
-        case 4: return "Финальная пустота";
-        default: return "Терминальный эмбиент";
-    }
-}
-
-void interruptibleAmbientSleep(int ms) {
-    int waited = 0;
-    while (ambientRunning && waited < ms) {
-        int step = std::min(50, ms - waited);
-        std::this_thread::sleep_for(std::chrono::milliseconds(step));
-        waited += step;
-    }
-}
-
-void ambientLoop(int chapter) {
-    std::vector<int> pattern = ambientPatternForChapter(chapter);
-    size_t index = 0;
-    while (ambientRunning && terminalAudioEnabled) {
-        interruptibleAmbientSleep(pattern[index]);
-        if (!ambientRunning || !terminalAudioEnabled) break;
-        terminalBell(1, 0);
-        index = (index + 1) % pattern.size();
-    }
-}
-
-void stopAmbient() {
-    ambientRunning = false;
-    if (ambientThread.joinable()) ambientThread.join();
-}
-
-void startChapterAmbient(int chapter) {
-    stopAmbient();
-    if (!terminalAudioEnabled) return;
-    ambientRunning = true;
-    ambientThread = std::thread(ambientLoop, chapter);
-    slowprint("[♪] Терминальный эмбиент: " + ambientNameForChapter(chapter) + ".\n");
-    terminalBell(2, 80);
-}
-
-void configureTerminalAudio() {
-    std::cout << "\nВключить терминальные эмбиенты?\n";
-    std::cout << "[1] Да, пусть терминал пищит разными главами\n";
-    std::cout << "[2] Нет, играем в тишине\n>>> ";
-    int choice = 2;
-    std::cin >> choice;
-    terminalAudioEnabled = (choice == 1);
-    if (terminalAudioEnabled) {
-        terminalBell(2, 80);
-        slowprint("[♪] Эмбиенты включены. Если терминал молчит — проверь terminal bell в настройках.\n");
-    } else {
-        slowprint("[♪] Эмбиенты выключены.\n");
-    }
 }
 
 std::string LOGO = R"(
@@ -1620,20 +1537,6 @@ int main() {
         rewardChapterTransition(p, 4);
     }
     startChapterAmbient(4);
-        chapter1(p);
-        if (p.hp<=0) return 0;
-        rewardChapterTransition(p, 2);
-    }
-    if (currentChapter <= 2) {
-        chapter2(p);
-        if (p.hp<=0) return 0;
-        rewardChapterTransition(p, 3);
-    }
-    if (currentChapter <= 3) {
-        chapter3(p);
-        if (p.hp<=0) return 0;
-        rewardChapterTransition(p, 4);
-    }
     chapter4(p);
     stopAmbient();
     slowprint("\nСпасибо за игру! print(\"The End.\")\n");
