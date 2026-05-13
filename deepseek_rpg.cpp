@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <map>
+#include <fstream>
+#include <limits>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -294,6 +296,84 @@ struct Player {
             ", PSI " + (eff.psiRestore>=0?"+":"") + std::to_string(eff.psiRestore) + "\n");
     }
 };
+
+
+// ========== СОХРАНЕНИЯ ==========
+const std::string SAVE_FILE = "deepseek_save.dat";
+const std::string SAVE_MAGIC = "DEEPSEEK_SOSI_SAVE_V1";
+
+bool saveExists() {
+    std::ifstream file(SAVE_FILE);
+    return file.good();
+}
+
+bool saveProgress(const Player &p, int chapter) {
+    std::ofstream file(SAVE_FILE);
+    if (!file) {
+        slowprint("[!] Не удалось записать сохранение. Прогресс живёт только в оперативке.\n");
+        return false;
+    }
+
+    file << SAVE_MAGIC << "\n";
+    file << chapter << "\n";
+    file << p.name << "\n";
+    file << p.hp << ' ' << p.maxHp << ' ' << p.psi << ' ' << p.maxPsi << "\n";
+    file << p.admin << ' ' << p.germonenkoRelation << ' ' << p.fedilRelation << ' ' << p.glebMadness << "\n";
+    file << p.yarikAlive << ' ' << p.tankReady << "\n";
+    file << p.inventory.size() << "\n";
+    for (Item it : p.inventory) {
+        file << static_cast<int>(it) << ' ';
+    }
+    file << "\n";
+
+    slowprint("[💾] Прогресс сохранён: глава " + std::to_string(chapter) + ", HP " +
+        std::to_string(p.hp) + "/" + std::to_string(p.maxHp) + ".\n");
+    return true;
+}
+
+bool loadProgress(Player &p, int &chapter) {
+    std::ifstream file(SAVE_FILE);
+    if (!file) return false;
+
+    std::string magic;
+    std::getline(file, magic);
+    if (magic != SAVE_MAGIC) return false;
+
+    Player loaded;
+    size_t inventorySize = 0;
+    file >> chapter;
+    file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    std::getline(file, loaded.name);
+    file >> loaded.hp >> loaded.maxHp >> loaded.psi >> loaded.maxPsi;
+    file >> loaded.admin >> loaded.germonenkoRelation >> loaded.fedilRelation >> loaded.glebMadness;
+    file >> loaded.yarikAlive >> loaded.tankReady;
+    file >> inventorySize;
+
+    loaded.inventory.clear();
+    for (size_t i = 0; i < inventorySize; ++i) {
+        int rawItem = 0;
+        file >> rawItem;
+        if (rawItem >= static_cast<int>(Item::NONE) && rawItem <= static_cast<int>(Item::MELCOIN) &&
+            loaded.inventory.size() < Player::maxItems) {
+            loaded.inventory.push_back(static_cast<Item>(rawItem));
+        }
+    }
+
+    if (!file && !file.eof()) return false;
+    if (chapter < 1 || chapter > 4) return false;
+
+    p = loaded;
+    return true;
+}
+
+void rewardChapterTransition(Player &p, int nextChapter) {
+    int before = p.hp;
+    p.hp = std::min(p.maxHp, p.hp + 20);
+    slowprint("\n[+] Переход в главу " + std::to_string(nextChapter) + ": +20 HP (" +
+        std::to_string(before) + " -> " + std::to_string(p.hp) + ").\n");
+    saveProgress(p, nextChapter);
+    pause(1);
+}
 
 // ========== ВРАГИ ==========
 struct Enemy {
@@ -1293,16 +1373,48 @@ int main() {
     srand(static_cast<unsigned>(time(0)));
     setlocale(LC_ALL, "");
     Player p;
+    int currentChapter = 1;
+
     drawArt(LOGO, 3);
-    slowprint("Твоё имя: ");
-    std::getline(std::cin>>std::ws, p.name);
-    loading("Сканирование коры", 2);
-    chapter1(p);
-    if (p.hp<=0) return 0;
-    chapter2(p);
-    if (p.hp<=0) return 0;
-    chapter3(p);
-    if (p.hp<=0) return 0;
+    if (saveExists()) {
+        slowprint("Найдено сохранение.\n");
+        std::cout << "[1] Продолжить с сохранённой главы\n[2] Новая игра\n>>> ";
+        int menuChoice = 1;
+        std::cin >> menuChoice;
+        if (menuChoice == 1 && loadProgress(p, currentChapter)) {
+            slowprint("[💾] Загружено сохранение: " + p.name + ", глава " +
+                std::to_string(currentChapter) + ".\n");
+            loading("Восстановление соси-строк", 1);
+        } else {
+            if (menuChoice == 1) slowprint("[!] Сохранение повреждено. Начинаем новую игру.\n");
+            currentChapter = 1;
+            slowprint("Твоё имя: ");
+            std::getline(std::cin>>std::ws, p.name);
+            loading("Сканирование коры", 2);
+            saveProgress(p, currentChapter);
+        }
+    } else {
+        slowprint("Твоё имя: ");
+        std::getline(std::cin>>std::ws, p.name);
+        loading("Сканирование коры", 2);
+        saveProgress(p, currentChapter);
+    }
+
+    if (currentChapter <= 1) {
+        chapter1(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 2);
+    }
+    if (currentChapter <= 2) {
+        chapter2(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 3);
+    }
+    if (currentChapter <= 3) {
+        chapter3(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 4);
+    }
     chapter4(p);
     slowprint("\nСпасибо за игру! print(\"The End.\")\n");
     return 0;
