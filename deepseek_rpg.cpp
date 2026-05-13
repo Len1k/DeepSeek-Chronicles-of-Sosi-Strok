@@ -177,6 +177,7 @@ void configureTerminalAudio() {
 }
 
 void slowprint(const std::string &s, int ms) {
+void slowprint(const std::string &s, int ms = 25) {
     drainPendingSkipKeys();
     for (size_t i = 0; i < s.size(); ++i) {
         std::cout << s[i] << std::flush;
@@ -1537,6 +1538,20 @@ int main() {
         rewardChapterTransition(p, 4);
     }
     startChapterAmbient(4);
+        chapter1(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 2);
+    }
+    if (currentChapter <= 2) {
+        chapter2(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 3);
+    }
+    if (currentChapter <= 3) {
+        chapter3(p);
+        if (p.hp<=0) return 0;
+        rewardChapterTransition(p, 4);
+    }
     chapter4(p);
     stopAmbient();
     slowprint("\nСпасибо за игру! print(\"The End.\")\n");
