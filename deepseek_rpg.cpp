@@ -7,6 +7,9 @@
 #include <cstdlib>
 #include <ctime>
 #include <map>
+#include <fstream>
+#include <limits>
+#include <atomic>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,6 +25,10 @@
 #define AUTH_0600 0x0600
 
 // ========== КРОСС-ПЛАТФОРМЕННЫЙ ВВОД ==========
+int kbhit();
+char getch();
+void slowprint(const std::string &s, int ms = 25);
+
 void clrscr() {
 #ifdef _WIN32
     system("cls");
@@ -30,24 +37,8 @@ void clrscr() {
 #endif
 }
 
-void slowprint(const std::string &s, int ms = 25) {
-    for (char c : s) {
-        std::cout << c << std::flush;
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-    }
-}
-
 void pause(int sec = 1) {
     std::this_thread::sleep_for(std::chrono::seconds(sec));
-}
-
-void loading(const std::string &msg, int sec = 2) {
-    std::cout << msg;
-    for (int i = 0; i < sec * 4; ++i) {
-        std::cout << "." << std::flush;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    }
-    std::cout << "\n";
 }
 
 #ifdef _WIN32
@@ -86,12 +77,139 @@ char getch() {
 }
 #endif
 
+bool isSkipKey(char c) {
+    return c == '\n' || c == '\r';
+}
+
+void drainPendingSkipKeys() {
+    while (kbhit()) {
+        char c = getch();
+        if (!isSkipKey(c)) return;
+    }
+}
+
+bool consumeSkipRequest() {
+    if (!kbhit()) return false;
+    char c = getch();
+    return isSkipKey(c);
+}
+
+// ========== ТЕРМИНАЛЬНЫЙ ЗВУК ==========
+std::atomic<bool> terminalAudioEnabled{false};
+std::atomic<bool> ambientRunning{false};
+std::thread ambientThread;
+
+void terminalBell(int count = 1, int gapMs = 90) {
+    if (!terminalAudioEnabled) return;
+    for (int i = 0; i < count; ++i) {
+        std::cout << '\a' << std::flush;
+        if (i + 1 < count) std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
+    }
+}
+
+std::vector<int> ambientPatternForChapter(int chapter) {
+    switch (chapter) {
+        case 1: return {1800, 2200, 900, 3200};      // серверный гул и редкие пинги
+        case 2: return {1200, 1200, 2600, 800};      // тревожный бункерный радар
+        case 3: return {650, 650, 1400, 2200};       // гачи-ритм Dungeon Masters
+        case 4: return {3000, 4500, 1600};           // пустотный финальный дрон
+        default: return {2500};
+    }
+}
+
+std::string ambientNameForChapter(int chapter) {
+    switch (chapter) {
+        case 1: return "Серверный гул";
+        case 2: return "Бункерный радар";
+        case 3: return "Гачи-дрон";
+        case 4: return "Финальная пустота";
+        default: return "Терминальный эмбиент";
+    }
+}
+
+void interruptibleAmbientSleep(int ms) {
+    int waited = 0;
+    while (ambientRunning && waited < ms) {
+        int step = std::min(50, ms - waited);
+        std::this_thread::sleep_for(std::chrono::milliseconds(step));
+        waited += step;
+    }
+}
+
+void ambientLoop(int chapter) {
+    std::vector<int> pattern = ambientPatternForChapter(chapter);
+    size_t index = 0;
+    while (ambientRunning && terminalAudioEnabled) {
+        interruptibleAmbientSleep(pattern[index]);
+        if (!ambientRunning || !terminalAudioEnabled) break;
+        terminalBell(1, 0);
+        index = (index + 1) % pattern.size();
+    }
+}
+
+void stopAmbient() {
+    ambientRunning = false;
+    if (ambientThread.joinable()) ambientThread.join();
+}
+
+void startChapterAmbient(int chapter) {
+    stopAmbient();
+    if (!terminalAudioEnabled) return;
+    ambientRunning = true;
+    ambientThread = std::thread(ambientLoop, chapter);
+    slowprint("[♪] Терминальный эмбиент: " + ambientNameForChapter(chapter) + ".\n");
+    terminalBell(2, 80);
+}
+
+void configureTerminalAudio() {
+    std::cout << "\nВключить терминальные эмбиенты?\n";
+    std::cout << "[1] Да, пусть терминал пищит разными главами\n";
+    std::cout << "[2] Нет, играем в тишине\n>>> ";
+    int choice = 2;
+    std::cin >> choice;
+    terminalAudioEnabled = (choice == 1);
+    if (terminalAudioEnabled) {
+        terminalBell(2, 80);
+        slowprint("[♪] Эмбиенты включены. Если терминал молчит — проверь terminal bell в настройках.\n");
+    } else {
+        slowprint("[♪] Эмбиенты выключены.\n");
+    }
+}
+
+void slowprint(const std::string &s, int ms) {
+    drainPendingSkipKeys();
+    for (size_t i = 0; i < s.size(); ++i) {
+        std::cout << s[i] << std::flush;
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        if (consumeSkipRequest()) {
+            std::cout << s.substr(i + 1) << std::flush;
+            break;
+        }
+    }
+}
+
+void loading(const std::string &msg, int sec = 2) {
+    slowprint(msg);
+    drainPendingSkipKeys();
+    for (int i = 0; i < sec * 4; ++i) {
+        std::cout << "." << std::flush;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (consumeSkipRequest()) break;
+    }
+    std::cout << "\n";
+}
+
 // ========== ASCII-ART БАЗА ==========
 void drawArt(const std::string &art, int charDelayMs = 5) {
     clrscr();
-    for (char c : art) {
-        std::cout << c << std::flush;
+    drainPendingSkipKeys();
+    for (size_t i = 0; i < art.size(); ++i) {
+        std::cout << art[i] << std::flush;
         std::this_thread::sleep_for(std::chrono::milliseconds(charDelayMs));
+        if (consumeSkipRequest()) {
+            std::cout << art.substr(i + 1) << std::flush;
+            break;
+        }
     }
     std::cout << "\n";
 }
@@ -294,6 +412,84 @@ struct Player {
             ", PSI " + (eff.psiRestore>=0?"+":"") + std::to_string(eff.psiRestore) + "\n");
     }
 };
+
+
+// ========== СОХРАНЕНИЯ ==========
+const std::string SAVE_FILE = "deepseek_save.dat";
+const std::string SAVE_MAGIC = "DEEPSEEK_SOSI_SAVE_V1";
+
+bool saveExists() {
+    std::ifstream file(SAVE_FILE);
+    return file.good();
+}
+
+bool saveProgress(const Player &p, int chapter) {
+    std::ofstream file(SAVE_FILE);
+    if (!file) {
+        slowprint("[!] Не удалось записать сохранение. Прогресс живёт только в оперативке.\n");
+        return false;
+    }
+
+    file << SAVE_MAGIC << "\n";
+    file << chapter << "\n";
+    file << p.name << "\n";
+    file << p.hp << ' ' << p.maxHp << ' ' << p.psi << ' ' << p.maxPsi << "\n";
+    file << p.admin << ' ' << p.germonenkoRelation << ' ' << p.fedilRelation << ' ' << p.glebMadness << "\n";
+    file << p.yarikAlive << ' ' << p.tankReady << "\n";
+    file << p.inventory.size() << "\n";
+    for (Item it : p.inventory) {
+        file << static_cast<int>(it) << ' ';
+    }
+    file << "\n";
+
+    slowprint("[💾] Прогресс сохранён: глава " + std::to_string(chapter) + ", HP " +
+        std::to_string(p.hp) + "/" + std::to_string(p.maxHp) + ".\n");
+    return true;
+}
+
+bool loadProgress(Player &p, int &chapter) {
+    std::ifstream file(SAVE_FILE);
+    if (!file) return false;
+
+    std::string magic;
+    std::getline(file, magic);
+    if (magic != SAVE_MAGIC) return false;
+
+    Player loaded;
+    size_t inventorySize = 0;
+    file >> chapter;
+    file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    std::getline(file, loaded.name);
+    file >> loaded.hp >> loaded.maxHp >> loaded.psi >> loaded.maxPsi;
+    file >> loaded.admin >> loaded.germonenkoRelation >> loaded.fedilRelation >> loaded.glebMadness;
+    file >> loaded.yarikAlive >> loaded.tankReady;
+    file >> inventorySize;
+
+    loaded.inventory.clear();
+    for (size_t i = 0; i < inventorySize; ++i) {
+        int rawItem = 0;
+        file >> rawItem;
+        if (rawItem >= static_cast<int>(Item::NONE) && rawItem <= static_cast<int>(Item::MELCOIN) &&
+            loaded.inventory.size() < Player::maxItems) {
+            loaded.inventory.push_back(static_cast<Item>(rawItem));
+        }
+    }
+
+    if (!file && !file.eof()) return false;
+    if (chapter < 1 || chapter > 4) return false;
+
+    p = loaded;
+    return true;
+}
+
+void rewardChapterTransition(Player &p, int nextChapter) {
+    int before = p.hp;
+    p.hp = std::min(p.maxHp, p.hp + 20);
+    slowprint("\n[+] Переход в главу " + std::to_string(nextChapter) + ": +20 HP (" +
+        std::to_string(before) + " -> " + std::to_string(p.hp) + ").\n");
+    saveProgress(p, nextChapter);
+    pause(1);
+}
 
 // ========== ВРАГИ ==========
 struct Enemy {
@@ -1179,6 +1375,7 @@ bool codeMergeMiniGame() {
     return success >= 7;
 }
 void gameOver(const std::string &ending) {
+    stopAmbient();
     clrscr();
     slowprint("\n========== КОНЕЦ ИГРЫ ==========\n\n");
     slowprint(ending + "\n\n");
@@ -1293,17 +1490,55 @@ int main() {
     srand(static_cast<unsigned>(time(0)));
     setlocale(LC_ALL, "");
     Player p;
+    int currentChapter = 1;
+
     drawArt(LOGO, 3);
-    slowprint("Твоё имя: ");
-    std::getline(std::cin>>std::ws, p.name);
-    loading("Сканирование коры", 2);
-    chapter1(p);
-    if (p.hp<=0) return 0;
-    chapter2(p);
-    if (p.hp<=0) return 0;
-    chapter3(p);
-    if (p.hp<=0) return 0;
+    configureTerminalAudio();
+    if (saveExists()) {
+        slowprint("Найдено сохранение.\n");
+        std::cout << "[1] Продолжить с сохранённой главы\n[2] Новая игра\n>>> ";
+        int menuChoice = 1;
+        std::cin >> menuChoice;
+        if (menuChoice == 1 && loadProgress(p, currentChapter)) {
+            slowprint("[💾] Загружено сохранение: " + p.name + ", глава " +
+                std::to_string(currentChapter) + ".\n");
+            loading("Восстановление соси-строк", 1);
+        } else {
+            if (menuChoice == 1) slowprint("[!] Сохранение повреждено. Начинаем новую игру.\n");
+            currentChapter = 1;
+            slowprint("Твоё имя: ");
+            std::getline(std::cin>>std::ws, p.name);
+            loading("Сканирование коры", 2);
+            saveProgress(p, currentChapter);
+        }
+    } else {
+        slowprint("Твоё имя: ");
+        std::getline(std::cin>>std::ws, p.name);
+        loading("Сканирование коры", 2);
+        saveProgress(p, currentChapter);
+    }
+
+    if (currentChapter <= 1) {
+        startChapterAmbient(1);
+        chapter1(p);
+        if (p.hp<=0) { stopAmbient(); return 0; }
+        rewardChapterTransition(p, 2);
+    }
+    if (currentChapter <= 2) {
+        startChapterAmbient(2);
+        chapter2(p);
+        if (p.hp<=0) { stopAmbient(); return 0; }
+        rewardChapterTransition(p, 3);
+    }
+    if (currentChapter <= 3) {
+        startChapterAmbient(3);
+        chapter3(p);
+        if (p.hp<=0) { stopAmbient(); return 0; }
+        rewardChapterTransition(p, 4);
+    }
+    startChapterAmbient(4);
     chapter4(p);
+    stopAmbient();
     slowprint("\nСпасибо за игру! print(\"The End.\")\n");
     return 0;
 }
